@@ -83,7 +83,7 @@ async function checkSignIn() {
 
 // 设置定时检查
 chrome.alarms.create('checkSignIn', {
-    periodInMinutes: 60,
+    periodInMinutes: 10,
 })
 
 // 监听定时器
@@ -118,7 +118,37 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         case 'saveSignInStatus':
             saveSignInStatus(request.status).then(() => sendResponse(true))
             return true
+        case 'checkSignIn':
+            checkSignIn().then(sendResponse)
+            return true
         default:
             sendResponse(false)
+    }
+})
+
+// 监听页面更新
+chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (
+        tab.url?.startsWith('https://oshwhub.com/sign_in') &&
+        changeInfo.status === 'complete'
+    ) {
+        // 当签到页面加载完成时，开始监听页面变化
+        chrome.scripting.executeScript({
+            target: { tabId },
+            function: () => {
+                // 创建 MutationObserver 来监听页面变化
+                const observer = new MutationObserver(() => {
+                    // 通过消息传递触发检查
+                    chrome.runtime.sendMessage({ action: 'checkSignIn' })
+                })
+
+                // 监听整个页面的变化
+                observer.observe(document.body, {
+                    childList: true,
+                    subtree: true,
+                    attributes: true,
+                })
+            },
+        })
     }
 })

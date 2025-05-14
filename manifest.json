@@ -12,7 +12,8 @@
         "alarms",
         "notifications",
         "cookies",
-        "storage"
+        "storage",
+        "scripting"
     ],
     "host_permissions": [
         "https://oshwhub.com/*"
