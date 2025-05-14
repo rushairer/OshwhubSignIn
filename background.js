@@ -98,6 +98,11 @@ chrome.runtime.onInstalled.addListener(() => {
     checkSignIn()
 })
 
+// 浏览器启动时初始化
+chrome.runtime.onStartup.addListener(() => {
+    checkSignIn()
+})
+
 // 添加消息监听器
 chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     switch (request.action) {
