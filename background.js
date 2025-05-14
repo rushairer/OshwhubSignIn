@@ -83,7 +83,7 @@ async function checkSignIn() {
 
 // 设置定时检查
 chrome.alarms.create('checkSignIn', {
-    periodInMinutes: 0.1,
+    periodInMinutes: 60,
 })
 
 // 监听定时器
