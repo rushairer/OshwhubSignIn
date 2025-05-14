@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body {
+      width: 300px;
+      padding: 15px;
+      font-family: Arial, sans-serif;
+    }
+    .status {
+      margin-bottom: 15px;
+      padding: 10px;
+      border-radius: 5px;
+      text-align: center;
+      font-weight: bold;
+    }
+    .signed {
+      background-color: #e8f5e9;
+      color: #2e7d32;
+    }
+    .unsigned {
+      background-color: #ffebee;
+      color: #c62828;
+    }
+    .not-logged-in {
+      background-color: #fff3e0;
+      color: #ef6c00;
+    }
+    .sign-button {
+      display: block;
+      width: 100%;
+      padding: 10px;
+      background-color: #1976d2;
+      color: white;
+      border: none;
+      border-radius: 5px;
+      cursor: pointer;
+      font-size: 16px;
+      text-decoration: none;
+      text-align: center;
+    }
+    .sign-button:hover {
+      background-color: #1565c0;
+    }
+    .sign-button:disabled {
+      background-color: #bbdefb;
+      cursor: not-allowed;
+    }
+  </style>
+</head>
+<body>
+  <div id="status" class="status">检查中...</div>
+  <a href="https://oshwhub.com/sign_in" id="signButton" class="sign-button" target="_blank" style="display: none">去签到</a>
+  <script src="popup.js"></script>
+</body>
+</html>

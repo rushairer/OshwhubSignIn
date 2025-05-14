@@ -1,0 +1,26 @@
+{
+    "manifest_version": 3,
+    "name": "OshwHub签到助手",
+    "version": "1.0",
+    "icons": {
+        "16": "icon.png",
+        "48": "icon.png",
+        "128": "icon.png"
+    },
+    "description": "自动检查OshwHub签到状态并提供签到提醒",
+    "permissions": [
+        "alarms",
+        "notifications",
+        "cookies",
+        "storage"
+    ],
+    "host_permissions": [
+        "https://oshwhub.com/*"
+    ],
+    "action": {
+        "default_popup": "popup.html"
+    },
+    "background": {
+        "service_worker": "background.js"
+    }
+}
