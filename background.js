@@ -13,6 +13,23 @@ function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+function getStrategyLabel(reason) {
+    switch (reason) {
+        case 'already_signed_in':
+            return '今日已签到 / 直接返回'
+        case 'signed_in':
+            return '写死坐标成功'
+        case 'signed_in_by_inference':
+            return '标签推算成功'
+        case 'api_signed_in':
+            return 'API 实时确认'
+        case 'cached_signed_in':
+            return '本地缓存'
+        default:
+            return '-'
+    }
+}
+
 // 检查登录状态
 async function checkLoginStatus() {
     try {
@@ -151,7 +168,7 @@ async function inferLabelPoint(tabId) {
             })
 
             if (!candidate) {
-                return { ok: false, reason: 'no_candidate' }
+                return { ok: false, reason: 'no_candidate', source: 'label-inference' }
             }
 
             let clickable = candidate
@@ -195,14 +212,20 @@ async function performSignIn() {
     const isLoggedIn = await checkLoginStatus()
     if (!isLoggedIn) {
         setBadge('未登录', '#FF0000')
-        return { ok: false, reason: 'not_logged_in' }
+        return { ok: false, reason: 'not_logged_in', strategyLabel: getStrategyLabel('not_logged_in') }
     }
 
     const beforeProfile = await getSignInProfile()
     if (beforeProfile?.isTodaySignIn) {
         await saveSignInStatus(true)
         setBadge('已签到', '#00FF00')
-        return { ok: true, reason: 'already_signed_in', profile: beforeProfile }
+        return {
+            ok: true,
+            reason: 'already_signed_in',
+            strategyLabel: getStrategyLabel('already_signed_in'),
+            profile: beforeProfile,
+            clickResults: [],
+        }
     }
 
     const tab = await chrome.tabs.create({
@@ -225,7 +248,13 @@ async function performSignIn() {
 
         const fixedVerify = await verifySignIn(5)
         if (fixedVerify.ok) {
-            return { ok: true, reason: 'signed_in', profile: fixedVerify.profile, clickResults }
+            return {
+                ok: true,
+                reason: 'signed_in',
+                strategyLabel: getStrategyLabel('signed_in'),
+                profile: fixedVerify.profile,
+                clickResults,
+            }
         }
 
         // 第 2 层：标签位置推算，重试一次
@@ -239,16 +268,35 @@ async function performSignIn() {
 
             const inferredVerify = await verifySignIn(5)
             if (inferredVerify.ok) {
-                return { ok: true, reason: 'signed_in_by_inference', profile: inferredVerify.profile, clickResults }
+                return {
+                    ok: true,
+                    reason: 'signed_in_by_inference',
+                    strategyLabel: getStrategyLabel('signed_in_by_inference'),
+                    profile: inferredVerify.profile,
+                    clickResults,
+                }
             }
         }
 
         setBadge('未签到', '#FF0000')
-        return { ok: false, reason: 'sign_in_not_confirmed', clickResults }
+        return {
+            ok: false,
+            reason: 'sign_in_not_confirmed',
+            strategyLabel: '固定点 + 标签推算均未确认',
+            profile: await getSignInProfile(),
+            clickResults,
+        }
     } catch (error) {
         console.error('执行签到失败:', error)
         setBadge('异常', '#FF0000')
-        return { ok: false, reason: 'exception', error: String(error) }
+        return {
+            ok: false,
+            reason: 'exception',
+            strategyLabel: '执行异常',
+            error: String(error),
+            profile: await getSignInProfile(),
+            clickResults: [],
+        }
     } finally {
         if (tab?.id) {
             chrome.tabs.remove(tab.id).catch(() => {})
@@ -326,6 +374,9 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
             return true
         case 'performSignIn':
             performSignIn().then(sendResponse)
+            return true
+        case 'getSignInProfile':
+            getSignInProfile().then(sendResponse)
             return true
         default:
             sendResponse(false)
