@@ -39,6 +39,7 @@
       font-size: 16px;
       text-decoration: none;
       text-align: center;
+      margin-bottom: 10px;
     }
     .sign-button:hover {
       background-color: #1565c0;
@@ -47,11 +48,18 @@
       background-color: #bbdefb;
       cursor: not-allowed;
     }
+    .hint {
+      font-size: 12px;
+      color: #666;
+      line-height: 1.5;
+    }
   </style>
 </head>
 <body>
   <div id="status" class="status">检查中...</div>
-  <a href="https://oshwhub.com/sign_in" id="signButton" class="sign-button" target="_blank" style="display: none">去签到</a>
+  <button id="signButton" class="sign-button" style="display: none">立即签到</button>
+  <a href="https://oshwhub.com/sign_in" id="openPageButton" class="sign-button" target="_blank" style="display: none; background-color: #455a64;">打开签到页</a>
+  <div class="hint">插件会自动检查签到状态；未签到时也支持在弹窗里直接执行签到。</div>
   <script src="popup.js"></script>
 </body>
 </html>
