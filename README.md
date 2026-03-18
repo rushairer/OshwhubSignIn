@@ -1,5 +1,8 @@
 # 立创开源硬件平台签到提醒 Chrome 插件
 
+<img width="366" height="249" alt="image" src="https://github.com/user-attachments/assets/fadc3461-2421-4bdf-ad31-9dfe11d17a82" />
+
+
 ## 功能
 
     每个小时检查一次，如果今天没有签到会通知提醒。
