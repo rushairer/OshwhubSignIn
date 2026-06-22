@@ -1,5 +1,7 @@
 const SIGN_IN_URL = 'https://oshwhub.com/sign_in'
 const PROFILE_API_URL = 'https://oshwhub.com/api/users/getSignInProfile'
+const TAB_LOAD_TIMEOUT_MS = 25000
+const TAB_SETTLE_DELAY_MS = 600
 const FALLBACK_POINTS = [
     { x: 175, y: 430, source: 'fixed-center' },
     { x: 168, y: 426, source: 'fixed-nearby' },
@@ -25,19 +27,118 @@ function getStrategyLabel(reason) {
             return 'API 实时确认'
         case 'cached_signed_in':
             return '本地缓存'
+        case 'not_logged_in':
+            return '未登录 / 需要手动登录'
+        case 'auth_redirect':
+            return '登录跳转 / 已保留页面'
+        case 'sign_in_page_unavailable':
+            return '签到页跳转 / 已保留页面'
+        case 'tab_load_timeout':
+            return '页面超时 / 已保留页面'
         default:
             return '-'
     }
 }
 
+function safeParseUrl(url) {
+    if (!url) return null
+    try {
+        return new URL(url)
+    } catch {
+        return null
+    }
+}
+
+function normalizePath(pathname = '') {
+    return pathname.replace(/\/+$/, '') || '/'
+}
+
+function isOshwHubUrl(url) {
+    const parsed = safeParseUrl(url)
+    if (!parsed) return false
+    const hostname = parsed.hostname.toLowerCase()
+    return hostname === 'oshwhub.com' || hostname.endsWith('.oshwhub.com')
+}
+
+function isSignInPageUrl(url) {
+    const parsed = safeParseUrl(url)
+    if (!parsed) return false
+    return parsed.hostname.toLowerCase() === 'oshwhub.com' && normalizePath(parsed.pathname) === '/sign_in'
+}
+
+function isLikelyAuthUrl(url) {
+    const parsed = safeParseUrl(url)
+    if (!parsed) return false
+
+    const hostname = parsed.hostname.toLowerCase()
+    const pathname = normalizePath(parsed.pathname).toLowerCase()
+    const fullUrl = parsed.href.toLowerCase()
+
+    if (hostname !== 'oshwhub.com' && !hostname.endsWith('.oshwhub.com')) {
+        return true
+    }
+
+    return [
+        '/login',
+        '/user/login',
+        '/users/login',
+        '/account/login',
+        '/passport/login',
+    ].some(path => pathname === path || pathname.startsWith(`${path}/`))
+        || pathname.includes('/oauth')
+        || pathname.includes('/auth')
+        || pathname.includes('/passport')
+        || fullUrl.includes('redirect') && fullUrl.includes('login')
+}
+
+function createTabLoadError(message, reason, url) {
+    const error = new Error(message)
+    error.reason = reason
+    error.url = url || ''
+    return error
+}
+
+async function revealTab(tabId) {
+    if (!tabId) return
+    try {
+        await chrome.tabs.update(tabId, { active: true })
+    } catch (error) {
+        console.warn('切换到标签页失败:', error)
+    }
+}
+
+async function getCurrentTabUrl(tabId, fallbackUrl = '') {
+    try {
+        const currentTab = await chrome.tabs.get(tabId)
+        return currentTab?.url || fallbackUrl
+    } catch {
+        return fallbackUrl
+    }
+}
+
+async function hasValidSessionCookie() {
+    const cookie = await chrome.cookies.get({
+        url: 'https://oshwhub.com',
+        name: 'oshwhub_session',
+    })
+
+    if (!cookie) return false
+    if (typeof cookie.expirationDate === 'number' && cookie.expirationDate <= Date.now() / 1000) {
+        return false
+    }
+
+    return true
+}
+
 // 检查登录状态
 async function checkLoginStatus() {
     try {
-        const cookie = await chrome.cookies.get({
-            url: 'https://oshwhub.com',
-            name: 'oshwhub_session',
-        })
-        return cookie !== null && cookie.expirationDate > Date.now() / 1000
+        const hasCookie = await hasValidSessionCookie()
+        if (!hasCookie) return false
+
+        // cookie 存在不代表服务端 session 仍有效；用资料接口再确认一次，避免打开签到页后被登录跳转卡住。
+        const profile = await getSignInProfile()
+        return profile !== null
     } catch (error) {
         console.error('检查登录状态失败:', error)
         return false
@@ -47,7 +148,9 @@ async function checkLoginStatus() {
 // 获取签到资料
 async function getSignInProfile() {
     try {
-        const response = await fetch(PROFILE_API_URL)
+        const response = await fetch(PROFILE_API_URL, { credentials: 'include' })
+        if (!response.ok) return null
+
         const data = await response.json()
         return data?.result || null
     } catch (error) {
@@ -84,22 +187,73 @@ function setBadge(text, color) {
     chrome.action.setBadgeBackgroundColor({ color })
 }
 
-async function waitForTabComplete(tabId, timeoutMs = 15000) {
+async function waitForTabComplete(tabId, timeoutMs = TAB_LOAD_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
-        const timeout = setTimeout(() => {
+        let latestUrl = ''
+        let settleTimer = null
+        let settled = false
+
+        const cleanup = () => {
+            clearTimeout(timeout)
+            clearTimeout(settleTimer)
             chrome.tabs.onUpdated.removeListener(listener)
-            reject(new Error('页面加载超时'))
+            chrome.tabs.onRemoved.removeListener(removedListener)
+        }
+
+        const finish = (tab) => {
+            if (settled) return
+            settled = true
+            latestUrl = tab?.url || latestUrl
+            cleanup()
+            resolve({ url: latestUrl, tab })
+        }
+
+        const fail = (error) => {
+            if (settled) return
+            settled = true
+            cleanup()
+            reject(error)
+        }
+
+        const timeout = setTimeout(() => {
+            fail(createTabLoadError('页面加载超时', 'tab_load_timeout', latestUrl))
         }, timeoutMs)
 
-        function listener(updatedTabId, changeInfo) {
-            if (updatedTabId === tabId && changeInfo.status === 'complete') {
-                clearTimeout(timeout)
-                chrome.tabs.onUpdated.removeListener(listener)
-                resolve()
+        function listener(updatedTabId, changeInfo, tab) {
+            if (updatedTabId !== tabId) return
+
+            if (changeInfo.url || tab?.url) {
+                latestUrl = changeInfo.url || tab.url
+            }
+
+            if (changeInfo.status === 'loading') {
+                clearTimeout(settleTimer)
+            }
+
+            if (changeInfo.status === 'complete') {
+                clearTimeout(settleTimer)
+                latestUrl = tab?.url || latestUrl
+                settleTimer = setTimeout(() => finish(tab), TAB_SETTLE_DELAY_MS)
+            }
+        }
+
+        function removedListener(removedTabId) {
+            if (removedTabId === tabId) {
+                fail(createTabLoadError('标签页已被关闭', 'tab_closed', latestUrl))
             }
         }
 
         chrome.tabs.onUpdated.addListener(listener)
+        chrome.tabs.onRemoved.addListener(removedListener)
+
+        chrome.tabs.get(tabId).then((tab) => {
+            latestUrl = tab?.url || latestUrl
+            if (tab?.status === 'complete') {
+                settleTimer = setTimeout(() => finish(tab), TAB_SETTLE_DELAY_MS)
+            }
+        }).catch((error) => {
+            fail(createTabLoadError(String(error), 'tab_closed', latestUrl))
+        })
     })
 }
 
@@ -208,6 +362,19 @@ async function verifySignIn(maxAttempts = 5) {
     return { ok: false }
 }
 
+async function handleAuthRequired(tabId, url, reason = 'auth_redirect', error = null) {
+    await revealTab(tabId)
+    setBadge('未登录', '#FF0000')
+    return {
+        ok: false,
+        reason: 'not_logged_in',
+        strategyLabel: getStrategyLabel(reason),
+        error: error ? String(error) : undefined,
+        loginUrl: url || '',
+        clickResults: [],
+    }
+}
+
 async function performSignIn() {
     const isLoggedIn = await checkLoginStatus()
     if (!isLoggedIn) {
@@ -232,10 +399,45 @@ async function performSignIn() {
         url: SIGN_IN_URL,
         active: false,
     })
+    let shouldCloseTab = true
 
     try {
-        await waitForTabComplete(tab.id)
+        const loadInfo = await waitForTabComplete(tab.id)
         await delay(1500)
+
+        const currentUrl = await getCurrentTabUrl(tab.id, loadInfo?.url)
+        if (!isSignInPageUrl(currentUrl)) {
+            const freshProfile = await getSignInProfile()
+
+            if (!freshProfile || isLikelyAuthUrl(currentUrl)) {
+                shouldCloseTab = false
+                return await handleAuthRequired(tab.id, currentUrl, 'auth_redirect')
+            }
+
+            if (freshProfile.isTodaySignIn) {
+                await saveSignInStatus(true)
+                setBadge('已签到', '#00FF00')
+                return {
+                    ok: true,
+                    reason: 'already_signed_in',
+                    strategyLabel: getStrategyLabel('api_signed_in'),
+                    profile: freshProfile,
+                    clickResults: [],
+                }
+            }
+
+            shouldCloseTab = false
+            await revealTab(tab.id)
+            setBadge('未签到', '#FF0000')
+            return {
+                ok: false,
+                reason: 'sign_in_page_unavailable',
+                strategyLabel: getStrategyLabel('sign_in_page_unavailable'),
+                profile: freshProfile,
+                loginUrl: currentUrl,
+                clickResults: [],
+            }
+        }
 
         const clickResults = []
 
@@ -288,6 +490,28 @@ async function performSignIn() {
         }
     } catch (error) {
         console.error('执行签到失败:', error)
+        const currentUrl = await getCurrentTabUrl(tab?.id, error?.url)
+
+        if (error?.reason === 'tab_load_timeout') {
+            shouldCloseTab = false
+            await revealTab(tab.id)
+            setBadge('异常', '#FF0000')
+            return {
+                ok: false,
+                reason: 'tab_load_timeout',
+                strategyLabel: getStrategyLabel('tab_load_timeout'),
+                error: String(error),
+                loginUrl: currentUrl,
+                profile: await getSignInProfile(),
+                clickResults: [],
+            }
+        }
+
+        if (isLikelyAuthUrl(currentUrl)) {
+            shouldCloseTab = false
+            return await handleAuthRequired(tab.id, currentUrl, 'auth_redirect', error)
+        }
+
         setBadge('异常', '#FF0000')
         return {
             ok: false,
@@ -298,7 +522,7 @@ async function performSignIn() {
             clickResults: [],
         }
     } finally {
-        if (tab?.id) {
+        if (shouldCloseTab && tab?.id) {
             chrome.tabs.remove(tab.id).catch(() => {})
         }
     }
@@ -390,7 +614,7 @@ chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     ) {
         chrome.scripting.executeScript({
             target: { tabId },
-            function: () => {
+            func: () => {
                 const observer = new MutationObserver(() => {
                     chrome.runtime.sendMessage({ action: 'checkSignIn' })
                 })
