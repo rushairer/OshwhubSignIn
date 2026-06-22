@@ -51,15 +51,22 @@ function renderLogs(clickResults = []) {
   logsContent.textContent = lines.join('\n')
 }
 
+function renderNotLoggedIn(message = '请先登录 OshwHub') {
+  statusElement.classList.remove('signed', 'unsigned')
+  statusElement.classList.add('not-logged-in')
+  statusElement.textContent = message
+  signButton.style.display = 'none'
+  signButton.disabled = false
+  signButton.textContent = '立即签到'
+  openPageButton.style.display = 'block'
+}
+
 // 更新状态显示
 function updateStatus(isLoggedIn, isSignedIn) {
   statusElement.classList.remove('signed', 'unsigned', 'not-logged-in')
 
   if (!isLoggedIn) {
-    statusElement.textContent = '请先登录 OshwHub'
-    statusElement.classList.add('not-logged-in')
-    signButton.style.display = 'none'
-    openPageButton.style.display = 'block'
+    renderNotLoggedIn()
     metaPanel.style.display = 'none'
     logsPanel.style.display = 'none'
     return
@@ -100,20 +107,28 @@ async function performSignIn() {
       return
     }
 
+    renderProfile(result?.profile, result?.strategyLabel)
+    renderLogs(result?.clickResults)
+    openPageButton.style.display = 'block'
+
+    if (result?.reason === 'not_logged_in') {
+      renderNotLoggedIn(result.loginUrl ? '登录状态已失效，请在打开的页面登录后重试' : '请先登录 OshwHub')
+      return
+    }
+
     statusElement.classList.remove('signed', 'not-logged-in')
     statusElement.classList.add('unsigned')
 
-    if (result?.reason === 'not_logged_in') {
-      statusElement.textContent = '请先登录 OshwHub'
+    if (result?.reason === 'tab_load_timeout') {
+      statusElement.textContent = '页面加载超时，已保留标签页'
+    } else if (result?.reason === 'sign_in_page_unavailable') {
+      statusElement.textContent = '签到页发生跳转，已保留标签页'
     } else {
       statusElement.textContent = '签到未确认，请打开签到页检查'
     }
 
-    renderProfile(result?.profile, result?.strategyLabel)
-    renderLogs(result?.clickResults)
     signButton.disabled = false
     signButton.textContent = '重试签到'
-    openPageButton.style.display = 'block'
   } catch (error) {
     console.error('执行签到失败:', error)
     statusElement.classList.remove('signed', 'not-logged-in')
