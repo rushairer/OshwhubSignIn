@@ -165,19 +165,82 @@ async function checkSignInStatus() {
     return profile?.isTodaySignIn || false
 }
 
-// 保存今天的签到状态
-async function saveSignInStatus(status) {
-    const today = new Date().toLocaleDateString('en-CA', {
+function getTodayKey(date = new Date()) {
+    return date.toLocaleDateString('en-CA', {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     })
+}
+
+function isLastDayOfMonth(date = new Date()) {
+    return date.getDate() === new Date(date.getFullYear(), date.getMonth() + 1, 0).getDate()
+}
+
+function getGiftReminderItems(date = new Date()) {
+    const items = []
+
+    if (date.getDay() === 0) {
+        items.push({ type: 'weekly', label: '周好礼', reason: '今天是周日' })
+    }
+
+    if (isLastDayOfMonth(date)) {
+        items.push({ type: 'monthly', label: '月好礼', reason: '今天是本月最后一天' })
+    }
+
+    return items
+}
+
+function getGiftReminderMessage(items) {
+    if (items.length === 1) {
+        return `${items[0].reason}，签到完成啦，记得领取${items[0].label}！`
+    }
+
+    return '今天既是周日，也是本月最后一天，签到完成啦，记得领取周好礼和月好礼！'
+}
+
+async function notifyGiftReminderIfNeeded(date = new Date()) {
+    const items = getGiftReminderItems(date)
+    if (items.length === 0) return []
+
+    const today = getTodayKey(date)
+    const keysByType = items.reduce((acc, item) => {
+        acc[item.type] = `giftReminder:${today}:${item.type}`
+        return acc
+    }, {})
+    const sentStatus = await chrome.storage.local.get(Object.values(keysByType))
+    const pendingItems = items.filter(item => !sentStatus[keysByType[item.type]])
+
+    if (pendingItems.length === 0) return []
+
+    await chrome.notifications.create(`giftReminder:${today}:${pendingItems.map(item => item.type).join('-')}`, {
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icon.png'),
+        title: '签到完成，别忘了领取好礼',
+        message: getGiftReminderMessage(pendingItems),
+    })
+
+    const updates = pendingItems.reduce((acc, item) => {
+        acc[keysByType[item.type]] = true
+        return acc
+    }, {})
+    await chrome.storage.local.set(updates)
+
+    return pendingItems.map(item => item.type)
+}
+
+// 保存今天的签到状态；签到完成后如遇周日/月末，则提醒领取周好礼/月好礼。
+async function saveSignInStatus(status) {
+    const now = new Date()
+    const today = getTodayKey(now)
     await chrome.storage.local.set({ [today]: status })
+
+    if (status) {
+        await notifyGiftReminderIfNeeded(now)
+    }
 }
 
 // 获取今天的签到状态
 async function getTodaySignInStatus() {
-    const today = new Date().toLocaleDateString('en-CA', {
-        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
-    })
+    const today = getTodayKey()
     const result = await chrome.storage.local.get(today)
     return result[today] || false
 }
@@ -542,14 +605,6 @@ async function checkSignIn() {
         return { ok: true, reason: 'cached_signed_in' }
     }
 
-    setBadge('未签到', '#FF0000')
-    chrome.notifications.create({
-        type: 'basic',
-        iconUrl: chrome.runtime.getURL('icon.png'),
-        title: '立创开源硬件平台签到提醒',
-        message: '今天还没有签到哟，快去签到吧！',
-    })
-
     const isSignedIn = await checkSignInStatus()
     if (isSignedIn) {
         await saveSignInStatus(true)
@@ -558,6 +613,13 @@ async function checkSignIn() {
     }
 
     setBadge('未签到', '#FF0000')
+    chrome.notifications.create({
+        type: 'basic',
+        iconUrl: chrome.runtime.getURL('icon.png'),
+        title: '立创开源硬件平台签到提醒',
+        message: '今天还没有签到哟，快去签到吧！',
+    })
+
     return { ok: false, reason: 'unsigned' }
 }
 
